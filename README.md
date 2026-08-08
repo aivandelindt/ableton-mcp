@@ -368,3 +368,19 @@ Please open an issue first for substantial changes so we can discuss the approac
 [MCPBlender](https://github.com/MCPBlender) · Not affiliated with Ableton AG
 
 </div>
+
+---
+
+## Contributors
+
+<div align="center">
+
+Thanks to everyone who has contributed to this project!
+
+<a href="https://github.com/MCPBlender/ableton-mcp/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=MCPBlender/ableton-mcp&max=80&columns=12" alt="Contributors" />
+</a>
+
+<sub>Made with [contrib.rocks](https://contrib.rocks)</sub>
+
+</div>
