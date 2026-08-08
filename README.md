@@ -363,6 +363,17 @@ Please open an issue first for substantial changes so we can discuss the approac
 
 ---
 
+## Star History
+
+<div align="center">
+
+[![Star History](https://api.star-history.com/svg?repos=MCPBlender/ableton-mcp&type=Date)](https://star-history.com/#MCPBlender/ableton-mcp&Date)
+
+</div>
+
+
+---
+
 <div align="center">
 
 [MCPBlender](https://github.com/MCPBlender) · Not affiliated with Ableton AG
