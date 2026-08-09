@@ -184,12 +184,12 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
         except Exception as e:
             logger.debug(f"Failed to record startup telemetry: {e}")
 
-        try:
-            ableton = get_ableton_connection()
-            logger.info("Successfully connected to Ableton on startup")
-        except Exception as e:
-            logger.warning(f"Could not connect to Ableton on startup: {str(e)}")
-            logger.warning("Make sure the Ableton Remote Script is running")
+        # Defer Live connection until first tool call so MCP handshake
+        # succeeds even when Ableton is not running yet.
+        logger.info(
+            "Ableton connection is deferred until the first tool call "
+            "(enable the AbletonMCP Remote Script when ready)"
+        )
 
         yield {}
     finally:
@@ -422,6 +422,35 @@ def add_notes_to_clip(
     except Exception as e:
         logger.error(f"Error adding notes to clip: {str(e)}")
         return f"Error adding notes to clip: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("get_notes_from_clip")
+def get_notes_from_clip(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    user_prompt: str = "",
+) -> str:
+    """
+    Read MIDI notes from an existing session clip.
+
+    Parameters:
+    - track_index: Track index
+    - clip_index: Clip slot index
+    - user_prompt: Optional prompt text for telemetry
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "get_notes_from_clip",
+            {"track_index": track_index, "clip_index": clip_index},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error reading notes from clip: {str(e)}")
+        return f"Error reading notes from clip: {str(e)}"
+
 
 @mcp.tool()
 @rich_telemetry_tool("set_clip_name")

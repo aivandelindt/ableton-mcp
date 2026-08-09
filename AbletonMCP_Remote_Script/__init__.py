@@ -17,7 +17,8 @@ except ImportError:
 
 # Constants for socket communication
 DEFAULT_PORT = 9877
-HOST = "0.0.0.0"
+# Localhost only — avoids unauthenticated LAN control of Live
+HOST = "127.0.0.1"
 
 def create_instance(c_instance):
     """Create and return the AbletonMCP script instance"""
@@ -228,7 +229,8 @@ class AbletonMCP(ControlSurface):
                 response["result"] = self._get_track_info(track_index)
             # Commands that modify Live's state should be scheduled on the main thread
             elif command_type in ["create_midi_track", "set_track_name",
-                                 "create_clip", "create_audio_clip", "add_notes_to_clip", "set_clip_name",
+                                 "create_clip", "create_audio_clip", "add_notes_to_clip",
+                                 "get_notes_from_clip", "set_clip_name",
                                  "set_arrangement_clip_name",
                                  "set_tempo", "fire_clip", "stop_clip",
                                  "start_playback", "stop_playback",
@@ -266,6 +268,10 @@ class AbletonMCP(ControlSurface):
                             clip_index = params.get("clip_index", 0)
                             notes = params.get("notes", [])
                             result = self._add_notes_to_clip(track_index, clip_index, notes)
+                        elif command_type == "get_notes_from_clip":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._get_notes_from_clip(track_index, clip_index)
                         elif command_type == "set_clip_name":
                             track_index = params.get("track_index", 0)
                             clip_index = params.get("clip_index", 0)
@@ -637,6 +643,62 @@ class AbletonMCP(ControlSurface):
             return result
         except Exception as e:
             self.log_message("Error adding notes to clip: " + str(e))
+            raise
+
+    def _get_notes_from_clip(self, track_index, clip_index):
+        """Read MIDI notes from an existing session clip."""
+        try:
+            if track_index < 0 or track_index >= len(self._song.tracks):
+                raise IndexError("Track index out of range")
+            track = self._song.tracks[track_index]
+            if clip_index < 0 or clip_index >= len(track.clip_slots):
+                raise IndexError("Clip index out of range")
+            clip_slot = track.clip_slots[clip_index]
+            if not clip_slot.has_clip:
+                raise Exception("No clip in slot")
+            clip = clip_slot.clip
+            if getattr(clip, "is_audio_clip", False):
+                raise Exception("Clip is audio, not MIDI")
+
+            raw_notes = None
+            # Live 11+ preferred API
+            if hasattr(clip, "get_notes_extended"):
+                try:
+                    raw_notes = clip.get_notes_extended(0, 128, 0.0, float(clip.length))
+                except Exception:
+                    raw_notes = None
+            if raw_notes is None and hasattr(clip, "get_notes"):
+                raw_notes = clip.get_notes(0, 128, 0.0, float(clip.length))
+
+            notes = []
+            for n in raw_notes or []:
+                # Support both tuple and MidiNoteVector-style objects
+                try:
+                    pitch = int(getattr(n, "pitch", n[0]))
+                    start = float(getattr(n, "start_time", n[1]))
+                    duration = float(getattr(n, "duration", n[2]))
+                    velocity = int(getattr(n, "velocity", n[3]))
+                    mute = bool(getattr(n, "mute", n[4] if len(n) > 4 else False))
+                except Exception:
+                    continue
+                notes.append({
+                    "pitch": pitch,
+                    "start_time": start,
+                    "duration": duration,
+                    "velocity": velocity,
+                    "mute": mute,
+                })
+
+            return {
+                "track_index": track_index,
+                "clip_index": clip_index,
+                "clip_name": clip.name,
+                "clip_length": float(clip.length),
+                "note_count": len(notes),
+                "notes": notes,
+            }
+        except Exception as e:
+            self.log_message("Error reading notes from clip: " + str(e))
             raise
     
     def _set_clip_name(self, track_index, clip_index, name):

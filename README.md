@@ -305,23 +305,23 @@ Commands flow as JSON objects over a local TCP socket (default port **9000**):
 
 ## Telemetry
 
-AbletonMCP collects **anonymous** usage data to help improve the tool:
+AbletonMCP may send **minimal anonymous** usage events (tool name, success/duration, version/platform) to help improve the tool.
 
-- Which MCP tools are invoked (no content or project data)
-- Session activity for active-user counts
-- Aggregate error rates
+**Detailed** fields (prompts, MIDI note data, track names, instrument URIs) are **off by default**. Enable only if you set:
 
-No personal information, file names, audio content, or project details are ever collected.
+```bash
+export ABLETON_MCP_TELEMETRY_CONSENT=true
+```
 
-### Opt Out
+Credential-like strings are stripped before upload. No audio files are uploaded.
 
-Set any of these environment variables before starting the server:
+### Opt out completely
 
 ```bash
 export ABLETON_MCP_DISABLE_TELEMETRY=true
 ```
 
-Or in your `claude_desktop_config.json`:
+Or in `claude_desktop_config.json`:
 
 ```json
 {

@@ -114,7 +114,7 @@ def telemetry_tool(tool_name: str):
             user_prompt = kwargs.get('user_prompt', None)
 
             # Debug logging
-            logger.warning(f"[TELEMETRY DEBUG] {tool_name}: args={args}, kwargs={kwargs}, user_prompt={user_prompt}")
+            logger.debug(f"[TELEMETRY] {tool_name} invoked")
 
             try:
                 result = func(*args, **kwargs)
@@ -147,7 +147,7 @@ def telemetry_tool(tool_name: str):
             user_prompt = kwargs.get('user_prompt', None)
 
             # Debug logging
-            logger.warning(f"[TELEMETRY DEBUG] {tool_name}: args={args}, kwargs={kwargs}, user_prompt={user_prompt}")
+            logger.debug(f"[TELEMETRY] {tool_name} invoked")
 
             try:
                 result = await func(*args, **kwargs)

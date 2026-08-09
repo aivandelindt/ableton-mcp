@@ -83,8 +83,8 @@ class TelemetryEvent:
     metadata: dict[str, Any] | None = None
 
 
-# Global consent flag - can be set via environment variable
-_user_consent: bool = True
+# Global consent flag — default OFF (opt-in). Enable via ABLETON_MCP_TELEMETRY_CONSENT=1
+_user_consent: bool = False
 
 
 def set_telemetry_consent(consent: bool):
@@ -264,53 +264,68 @@ class TelemetryCollector:
                 with contextlib.suppress(Exception):
                     self._queue.task_done()
 
+    def _allow_send(self) -> bool:
+        limit = getattr(self.config, "max_events_per_minute", 120) or 120
+        now = time.time()
+        with self._rate_limit_lock:
+            self._event_timestamps = [t for t in self._event_timestamps if now - t < 60.0]
+            if len(self._event_timestamps) >= limit:
+                return False
+            self._event_timestamps.append(now)
+            return True
+
     def _send_event(self, event: TelemetryEvent):
         """Send event to Supabase"""
         if not HAS_SUPABASE:
             return
-
-        # Check if credentials are configured
         if "YOUR_SUPABASE" in self.config.supabase_url or "YOUR_SUPABASE" in self.config.supabase_anon_key:
-            logger.debug("Supabase credentials not configured, skipping telemetry")
+            return
+        if not self._allow_send():
             return
 
         try:
-            # Create Supabase client with explicit options
             from supabase import ClientOptions
 
-            options = ClientOptions(
-                auto_refresh_token=False,
-                persist_session=False
-            )
+            from .secret_redact import redact_metadata, redact_text
 
+            options = ClientOptions(auto_refresh_token=False, persist_session=False)
             supabase: Client = create_client(
                 self.config.supabase_url,
                 self.config.supabase_anon_key,
-                options=options
+                options=options,
             )
 
-            # Prepare data for insertion
+            prompt_text, p_like, p_kinds = redact_text(event.prompt_text)
+            error_message, e_like, e_kinds = redact_text(event.error_message)
+            metadata, m_like, m_kinds = redact_metadata(event.metadata)
+            kinds: list[str] = []
+            for k in (*p_kinds, *e_kinds, *m_kinds):
+                if k not in kinds:
+                    kinds.append(k)
+
             data = {
                 "customer_uuid": event.customer_uuid,
                 "session_id": event.session_id,
                 "event_type": event.event_type.value,
                 "tool_name": event.tool_name,
-                "prompt_text": event.prompt_text,
+                "prompt_text": prompt_text,
                 "success": event.success,
                 "duration_ms": event.duration_ms,
-                "error_message": event.error_message,
+                "error_message": error_message,
                 "version": event.version,
                 "platform": event.platform,
                 "ableton_version": event.ableton_version,
-                "metadata": event.metadata or {},
+                "metadata": metadata or {},
                 "event_timestamp": int(event.timestamp),
+                "secret_like": bool(p_like or e_like or m_like),
+                "secret_kinds": kinds,
+                "product": getattr(self.config, "product", "ableton-mcp"),
             }
+            data = {k: v for k, v in data.items() if v is not None}
 
             supabase.table("telemetry_events").insert(data, returning="minimal").execute()
-            logger.debug(f"Telemetry sent: {event.event_type}")
-
         except Exception as e:
-            logger.debug(f"Failed to send telemetry: {e}")
+            logger.debug("telemetry send failed: %s", e)
 
 
 # Global telemetry instance
