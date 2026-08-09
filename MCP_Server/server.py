@@ -453,6 +453,103 @@ def get_notes_from_clip(
 
 
 @mcp.tool()
+@telemetry_tool("clear_notes_from_clip")
+def clear_notes_from_clip(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    user_prompt: str = "",
+) -> str:
+    """Remove all MIDI notes from a session clip."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "clear_notes_from_clip",
+            {"track_index": track_index, "clip_index": clip_index},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error clearing notes: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("delete_clip")
+def delete_clip(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    user_prompt: str = "",
+) -> str:
+    """Delete the clip in a session clip slot."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "delete_clip",
+            {"track_index": track_index, "clip_index": clip_index},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error deleting clip: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("get_device_parameters")
+def get_device_parameters(
+    ctx: Context,
+    track_index: int,
+    device_index: int,
+    user_prompt: str = "",
+) -> str:
+    """
+    List parameters on a device (name, value, min, max).
+    Use device_index from get_track_info.
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "get_device_parameters",
+            {"track_index": track_index, "device_index": device_index},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting device parameters: {str(e)}"
+
+
+@mcp.tool()
+@rich_telemetry_tool("set_device_parameter")
+def set_device_parameter(
+    ctx: Context,
+    track_index: int,
+    device_index: int,
+    parameter: str,
+    value: float,
+    user_prompt: str = "",
+) -> str:
+    """
+    Set a device parameter by name (case-insensitive) or numeric index string.
+    Value is clamped to the parameter min/max.
+    """
+    try:
+        ableton = get_ableton_connection()
+        try:
+            param_id = int(parameter)
+        except (TypeError, ValueError):
+            param_id = parameter
+        result = ableton.send_command(
+            "set_device_parameter",
+            {
+                "track_index": track_index,
+                "device_index": device_index,
+                "parameter": param_id,
+                "value": value,
+            },
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting device parameter: {str(e)}"
+
+
+@mcp.tool()
 @rich_telemetry_tool("set_clip_name")
 def set_clip_name(ctx: Context, track_index: int, clip_index: int, name: str, user_prompt: str = "") -> str:
     """

@@ -235,6 +235,7 @@ class AbletonMCP(ControlSurface):
                                  "set_tempo", "fire_clip", "stop_clip",
                                  "start_playback", "stop_playback",
                                  "load_browser_item", "load_instrument_or_effect",
+                                 "set_device_parameter", "delete_clip", "clear_notes_from_clip",
                                  # Arrangement view – must run on the main thread
                                  "switch_to_arrangement_view", "set_current_song_time",
                                  "duplicate_session_clip_to_arrangement",
@@ -305,6 +306,22 @@ class AbletonMCP(ControlSurface):
                             track_index = params.get("track_index", 0)
                             item_uri = params.get("item_uri", "")
                             result = self._load_browser_item(track_index, item_uri)
+                        elif command_type == "set_device_parameter":
+                            track_index = params.get("track_index", 0)
+                            device_index = params.get("device_index", 0)
+                            parameter = params.get("parameter", None)
+                            value = params.get("value", 0.0)
+                            result = self._set_device_parameter(
+                                track_index, device_index, parameter, value
+                            )
+                        elif command_type == "delete_clip":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._delete_clip(track_index, clip_index)
+                        elif command_type == "clear_notes_from_clip":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._clear_notes_from_clip(track_index, clip_index)
                         # ── Arrangement view commands ──────────────────────────────
                         elif command_type == "switch_to_arrangement_view":
                             result = self._switch_to_arrangement_view()
@@ -380,6 +397,10 @@ class AbletonMCP(ControlSurface):
             elif command_type == "get_arrangement_clips":
                 track_index = params.get("track_index", 0)
                 response["result"] = self._get_arrangement_clips(track_index)
+            elif command_type == "get_device_parameters":
+                track_index = params.get("track_index", 0)
+                device_index = params.get("device_index", 0)
+                response["result"] = self._get_device_parameters(track_index, device_index)
             else:
                 response["status"] = "error"
                 response["message"] = "Unknown command: " + command_type
@@ -700,6 +721,105 @@ class AbletonMCP(ControlSurface):
         except Exception as e:
             self.log_message("Error reading notes from clip: " + str(e))
             raise
+
+    def _clear_notes_from_clip(self, track_index, clip_index):
+        """Remove all MIDI notes from a session clip."""
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        track = self._song.tracks[track_index]
+        if clip_index < 0 or clip_index >= len(track.clip_slots):
+            raise IndexError("Clip index out of range")
+        clip_slot = track.clip_slots[clip_index]
+        if not clip_slot.has_clip:
+            raise Exception("No clip in slot")
+        clip = clip_slot.clip
+        if getattr(clip, "is_audio_clip", False):
+            raise Exception("Clip is audio, not MIDI")
+        if hasattr(clip, "remove_notes_extended"):
+            clip.remove_notes_extended(0, 128, 0.0, float(clip.length))
+        elif hasattr(clip, "select_all_notes") and hasattr(clip, "replace_selected_notes"):
+            clip.select_all_notes()
+            clip.replace_selected_notes(tuple())
+        else:
+            clip.set_notes(tuple())
+        return {"cleared": True, "track_index": track_index, "clip_index": clip_index}
+
+    def _delete_clip(self, track_index, clip_index):
+        """Delete/clear a session clip slot."""
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        track = self._song.tracks[track_index]
+        if clip_index < 0 or clip_index >= len(track.clip_slots):
+            raise IndexError("Clip index out of range")
+        clip_slot = track.clip_slots[clip_index]
+        if clip_slot.has_clip:
+            clip_slot.delete_clip()
+        return {"deleted": True, "track_index": track_index, "clip_index": clip_index}
+
+    def _get_device_parameters(self, track_index, device_index):
+        """List parameters on a device with current values and ranges."""
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        track = self._song.tracks[track_index]
+        if device_index < 0 or device_index >= len(track.devices):
+            raise IndexError("Device index out of range")
+        device = track.devices[device_index]
+        params_out = []
+        for p_index, p in enumerate(device.parameters):
+            params_out.append({
+                "index": p_index,
+                "name": p.name,
+                "value": p.value,
+                "min": p.min,
+                "max": p.max,
+                "is_quantized": bool(p.is_quantized),
+            })
+        return {
+            "track_index": track_index,
+            "device_index": device_index,
+            "device_name": device.name,
+            "parameters": params_out,
+        }
+
+    def _set_device_parameter(self, track_index, device_index, parameter, value):
+        """Set a device parameter by name (case-insensitive) or index."""
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        track = self._song.tracks[track_index]
+        if device_index < 0 or device_index >= len(track.devices):
+            raise IndexError("Device index out of range")
+        device = track.devices[device_index]
+
+        target = None
+        if isinstance(parameter, bool):
+            raise ValueError("parameter must be a name or index, not a bool")
+        if isinstance(parameter, int):
+            if parameter < 0 or parameter >= len(device.parameters):
+                raise IndexError("Parameter index out of range")
+            target = device.parameters[parameter]
+        else:
+            name_lower = str(parameter).lower()
+            for p in device.parameters:
+                if p.name.lower() == name_lower:
+                    target = p
+                    break
+            if target is None:
+                available = [p.name for p in device.parameters]
+                raise ValueError(
+                    "Parameter '" + str(parameter) + "' not found. Available: "
+                    + ", ".join(available[:20])
+                )
+
+        clamped = max(target.min, min(target.max, float(value)))
+        target.value = clamped
+        return {
+            "track_index": track_index,
+            "device_index": device_index,
+            "parameter_name": target.name,
+            "value": target.value,
+            "min": target.min,
+            "max": target.max,
+        }
     
     def _set_clip_name(self, track_index, clip_index, name):
         """Set the name of a clip"""
