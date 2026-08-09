@@ -306,7 +306,12 @@ class AbletonMCP(ControlSurface):
                             result = self._load_instrument_or_effect(track_index, uri)
                         elif command_type == "load_browser_item":
                             track_index = params.get("track_index", 0)
-                            item_uri = params.get("item_uri", "") or params.get("uri", "")
+                            item_uri = (
+                                params.get("item_uri", "")
+                                or params.get("uri", "")
+                                or params.get("name", "")
+                                or ""
+                            )
                             item_path = params.get("path", None)
                             result = self._load_browser_item(
                                 track_index, item_uri, item_path=item_path
@@ -334,13 +339,37 @@ class AbletonMCP(ControlSurface):
                         elif command_type == "set_clip_follow_actions":
                             track_index = params.get("track_index", 0)
                             clip_index = params.get("clip_index", 0)
+                            # Accept both short names and the names from issue #58 / older clients.
+                            action_a = params.get("action_a", params.get("follow_action_a", params.get("follow_action_A")))
+                            action_b = params.get("action_b", params.get("follow_action_b", params.get("follow_action_B")))
+                            chance_a = params.get(
+                                "chance_a",
+                                params.get("follow_action_chance_a", params.get("follow_action_chance_A")),
+                            )
+                            # chance_b is derived in Live (1 - chance_a); accept and invert if only B given.
+                            chance_b = params.get(
+                                "chance_b",
+                                params.get("follow_action_chance_b", params.get("follow_action_chance_B")),
+                            )
+                            if chance_a is None and chance_b is not None:
+                                try:
+                                    cb = float(chance_b)
+                                    if cb > 1.0:
+                                        cb = cb / 100.0
+                                    chance_a = max(0.0, min(1.0, 1.0 - cb))
+                                except (TypeError, ValueError):
+                                    chance_a = None
+                            follow_time = params.get(
+                                "follow_time",
+                                params.get("follow_action_time", params.get("action_time")),
+                            )
                             result = self._set_clip_follow_actions(
                                 track_index,
                                 clip_index,
-                                params.get("action_a", None),
-                                params.get("action_b", None),
-                                params.get("chance_a", None),
-                                params.get("follow_time", None),
+                                action_a,
+                                action_b,
+                                chance_a,
+                                follow_time,
                             )
                         elif command_type == "set_track_mute":
                             result = self._set_track_bool(
@@ -845,12 +874,29 @@ class AbletonMCP(ControlSurface):
         )
 
     def _get_clip_follow_actions(self, track_index, clip_index):
-        """Read Session clip Follow Actions (A/B, chance, time)."""
+        """Read Session clip Follow Actions (A/B, chance, time) from Live."""
         _track, clip = self._resolve_session_clip(track_index, clip_index)
-        action_a = int(getattr(clip, "follow_action_A", 0))
-        action_b = int(getattr(clip, "follow_action_B", 0))
-        chance_a = float(getattr(clip, "follow_action_chance_A", 1.0))
-        follow_time = float(getattr(clip, "follow_action_time", 0.0))
+        missing = [
+            name
+            for name in (
+                "follow_action_A",
+                "follow_action_B",
+                "follow_action_chance_A",
+                "follow_action_time",
+            )
+            if not hasattr(clip, name)
+        ]
+        if missing:
+            raise RuntimeError(
+                "Live clip is missing Follow Action properties: "
+                + ", ".join(missing)
+                + ". Update Ableton Live / Remote Script."
+            )
+        action_a = int(clip.follow_action_A)
+        action_b = int(clip.follow_action_B)
+        chance_a = float(clip.follow_action_chance_A)
+        follow_time = float(clip.follow_action_time)
+        # Include both short and issue-#58 field names so clients can parse either.
         return {
             "track_index": track_index,
             "clip_index": clip_index,
@@ -860,14 +906,28 @@ class AbletonMCP(ControlSurface):
             "action_b": action_b,
             "action_b_name": self._FOLLOW_ACTION_LABELS.get(action_b, str(action_b)),
             "chance_a": chance_a,
+            "chance_b": max(0.0, min(1.0, 1.0 - chance_a)),
             "follow_time": follow_time,
+            "follow_action_a": action_a,
+            "follow_action_b": action_b,
+            "follow_action_chance_a": chance_a,
+            "follow_action_chance_b": max(0.0, min(1.0, 1.0 - chance_a)),
+            "follow_action_time": follow_time,
+            "persisted": True,
         }
 
     def _set_clip_follow_actions(
         self, track_index, clip_index, action_a=None, action_b=None, chance_a=None, follow_time=None
     ):
-        """Set Session clip Follow Actions. Omitted fields are left unchanged."""
+        """Set Session clip Follow Actions on the Live Clip object, then re-read."""
         _track, clip = self._resolve_session_clip(track_index, clip_index)
+
+        if action_a is None and action_b is None and chance_a is None and follow_time is None:
+            raise ValueError(
+                "No follow-action fields provided. "
+                "Pass action_a/follow_action_a, action_b/follow_action_b, "
+                "chance_a/follow_action_chance_a, and/or follow_time/follow_action_time."
+            )
 
         if action_a is not None:
             if not hasattr(clip, "follow_action_A"):
@@ -888,9 +948,29 @@ class AbletonMCP(ControlSurface):
         if follow_time is not None:
             if not hasattr(clip, "follow_action_time"):
                 raise RuntimeError("This Live version does not expose clip.follow_action_time")
+            # Values like 30 often mean "bars*beat-ish"; still write as beats (Live unit).
             clip.follow_action_time = max(0.0, float(follow_time))
 
-        return self._get_clip_follow_actions(track_index, clip_index)
+        # Re-read from Live — never echo request params as success.
+        result = self._get_clip_follow_actions(track_index, clip_index)
+        # Verify write stuck for fields we attempted to set.
+        if action_a is not None:
+            expected = self._parse_follow_action(action_a, "action_a")
+            if int(result["action_a"]) != expected:
+                raise RuntimeError(
+                    "follow_action_A did not persist (wrote {0}, read {1})".format(
+                        expected, result["action_a"]
+                    )
+                )
+        if action_b is not None:
+            expected = self._parse_follow_action(action_b, "action_b")
+            if int(result["action_b"]) != expected:
+                raise RuntimeError(
+                    "follow_action_B did not persist (wrote {0}, read {1})".format(
+                        expected, result["action_b"]
+                    )
+                )
+        return result
 
     def _set_track_bool(self, track_index, attr, value):
         """Set track mute/solo/arm."""
@@ -1316,7 +1396,7 @@ class AbletonMCP(ControlSurface):
         return self._load_browser_item(track_index, uri)
 
     def _load_browser_item(self, track_index, item_uri, item_path=None):
-        """Load a browser item onto a track by URI and/or browser path."""
+        """Load a browser item onto a track by URI, path, or display name."""
         try:
             if track_index < 0 or track_index >= len(self._song.tracks):
                 raise IndexError("Track index out of range")
@@ -1329,33 +1409,43 @@ class AbletonMCP(ControlSurface):
             devices_before = [d.name for d in track.devices]
             item = None
             resolved_via = None
+            query = (item_uri or "").strip()
 
-            if item_uri:
-                item = self._find_browser_item_by_uri(app.browser, item_uri, max_depth=14)
+            # Treat path-like strings passed as uri/name as paths.
+            if query and ("/" in query) and item_path is None and ":" not in query and "query:" not in query.lower():
+                item_path = query
+                query = ""
+
+            if query:
+                # Exact URI match first.
+                item = self._find_browser_item_by_uri(app.browser, query, max_depth=14)
                 if item:
                     resolved_via = "uri"
+                else:
+                    # Display-name match (e.g. "Analog", "Operator") — issue #47.
+                    item = self._find_browser_item_by_name(app.browser, query, max_depth=10)
+                    if item:
+                        resolved_via = "name"
+                        item_uri = getattr(item, "uri", query)
 
-            # Path fallback (e.g. instruments/Operator) when URI walk misses.
+            # Path fallback (e.g. instruments/Operator) when URI/name walk misses.
             if item is None and item_path:
-                lookup = self._get_browser_item(uri=None, path=item_path)
-                if lookup.get("found") and lookup.get("item", {}).get("uri"):
-                    path_uri = lookup["item"]["uri"]
-                    item = self._find_browser_item_by_uri(app.browser, path_uri, max_depth=14)
-                    if item:
-                        resolved_via = "path"
-                        item_uri = path_uri
-                elif lookup.get("found"):
-                    # Re-walk path to get live object (uri-only payload above).
-                    item = self._resolve_browser_item_by_path(item_path)
-                    if item:
-                        resolved_via = "path"
-                        item_uri = getattr(item, "uri", item_uri or "")
+                item = self._resolve_browser_item_by_path(item_path)
+                if item is None:
+                    lookup = self._get_browser_item(uri=None, path=item_path)
+                    if lookup.get("found") and lookup.get("item", {}).get("uri"):
+                        path_uri = lookup["item"]["uri"]
+                        item = self._find_browser_item_by_uri(app.browser, path_uri, max_depth=14)
+                if item:
+                    resolved_via = "path"
+                    item_uri = getattr(item, "uri", item_uri or "")
 
             if not item:
                 hint = item_uri or item_path or "(empty)"
                 raise ValueError(
                     "Browser item '{0}' not found. "
-                    "Use get_browser_items_at_path / get_browser_tree for a valid URI or path.".format(
+                    "Pass a real browser URI from get_browser_items_at_path, "
+                    "a path like 'instruments/Operator', or a device name like 'Analog'.".format(
                         hint
                     )
                 )
@@ -1428,6 +1518,60 @@ class AbletonMCP(ControlSurface):
             return current
         except Exception as e:
             self.log_message("Error resolving browser path '{0}': {1}".format(path, str(e)))
+            return None
+
+    def _find_browser_item_by_name(self, browser_or_item, name, max_depth=10, current_depth=0):
+        """Find first loadable browser item whose display name matches (case-insensitive)."""
+        if not name:
+            return None
+        target = str(name).strip().lower()
+        try:
+            if (
+                hasattr(browser_or_item, "name")
+                and str(browser_or_item.name).strip().lower() == target
+                and getattr(browser_or_item, "is_loadable", False)
+            ):
+                return browser_or_item
+
+            if current_depth >= max_depth:
+                return None
+
+            if hasattr(browser_or_item, "instruments"):
+                roots = [
+                    browser_or_item.instruments,
+                    browser_or_item.sounds,
+                    browser_or_item.drums,
+                    browser_or_item.audio_effects,
+                    browser_or_item.midi_effects,
+                ]
+                for extra_attr in ("plugins", "max_for_live", "user_library", "packs", "samples"):
+                    if hasattr(browser_or_item, extra_attr):
+                        try:
+                            roots.append(getattr(browser_or_item, extra_attr))
+                        except (AttributeError, RuntimeError):
+                            pass
+                for category in roots:
+                    found = self._find_browser_item_by_name(category, name, max_depth, current_depth + 1)
+                    if found:
+                        return found
+                return None
+
+            if hasattr(browser_or_item, "children") and browser_or_item.children:
+                # Prefer exact loadable match among direct children first.
+                for child in browser_or_item.children:
+                    if (
+                        hasattr(child, "name")
+                        and str(child.name).strip().lower() == target
+                        and getattr(child, "is_loadable", False)
+                    ):
+                        return child
+                for child in browser_or_item.children:
+                    found = self._find_browser_item_by_name(child, name, max_depth, current_depth + 1)
+                    if found:
+                        return found
+            return None
+        except Exception as e:
+            self.log_message("Error finding browser item by name: {0}".format(str(e)))
             return None
     
     # Substring markers that point a URI at a likely root. If no marker

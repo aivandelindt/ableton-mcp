@@ -727,28 +727,43 @@ def set_clip_follow_actions(
     action_b: str = "",
     chance_a: float = -1.0,
     follow_time: float = -1.0,
+    follow_action_a: str = "",
+    follow_action_b: str = "",
+    follow_action_chance_a: float = -1.0,
+    follow_action_time: float = -1.0,
     user_prompt: str = "",
 ) -> str:
     """
     Set Follow Actions on a Session clip. Empty / -1 fields are left unchanged.
 
+    Live enum: 0=none 1=stop 2=play_again 3=previous 4=next 5=first 6=last 7=any 8=other
+    (aliases: next, stop, play_again, ...). Response is re-read from Live, not echoed input.
+
     Parameters:
     - track_index / clip_index: Session clip slot
-    - action_a / action_b: name (next, stop, play_again, ...) or "0"–"8"
-    - chance_a: probability of action A (0.0–1.0, or 0–100)
-    - follow_time: beats before clip end when the action fires
+    - action_a / action_b (or follow_action_a / follow_action_b): name or "0"–"8"
+    - chance_a / follow_action_chance_a: probability of A (0.0–1.0, or 0–100)
+    - follow_time / follow_action_time: beats before clip end when the action fires
+
+    Requires updated AbletonMCP Remote Script (restart Live after install).
     """
     try:
         ableton = get_ableton_connection()
         params = {"track_index": track_index, "clip_index": clip_index}
-        if action_a != "":
-            params["action_a"] = action_a
-        if action_b != "":
-            params["action_b"] = action_b
-        if chance_a >= 0:
-            params["chance_a"] = chance_a
-        if follow_time >= 0:
-            params["follow_time"] = follow_time
+        a = action_a if action_a != "" else follow_action_a
+        b = action_b if action_b != "" else follow_action_b
+        ca = chance_a if chance_a >= 0 else follow_action_chance_a
+        ft = follow_time if follow_time >= 0 else follow_action_time
+        if a != "":
+            params["action_a"] = a
+        if b != "":
+            params["action_b"] = b
+        if ca >= 0:
+            params["chance_a"] = ca
+        if ft >= 0:
+            params["follow_time"] = ft
+        if len(params) <= 2:
+            return "Error: provide at least one of action_a/b, chance_a, follow_time"
         result = ableton.send_command("set_clip_follow_actions", params)
         return json.dumps(result, indent=2)
     except Exception as e:
