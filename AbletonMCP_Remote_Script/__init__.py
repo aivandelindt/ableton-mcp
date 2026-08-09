@@ -236,6 +236,8 @@ class AbletonMCP(ControlSurface):
                                  "start_playback", "stop_playback",
                                  "load_browser_item", "load_instrument_or_effect",
                                  "set_device_parameter", "delete_clip", "clear_notes_from_clip",
+                                 "set_clip_follow_actions", "get_clip_follow_actions",
+                                 "set_track_mute", "set_track_solo", "set_track_arm",
                                  # Arrangement view – must run on the main thread
                                  "switch_to_arrangement_view", "set_current_song_time",
                                  "duplicate_session_clip_to_arrangement",
@@ -304,8 +306,11 @@ class AbletonMCP(ControlSurface):
                             result = self._load_instrument_or_effect(track_index, uri)
                         elif command_type == "load_browser_item":
                             track_index = params.get("track_index", 0)
-                            item_uri = params.get("item_uri", "")
-                            result = self._load_browser_item(track_index, item_uri)
+                            item_uri = params.get("item_uri", "") or params.get("uri", "")
+                            item_path = params.get("path", None)
+                            result = self._load_browser_item(
+                                track_index, item_uri, item_path=item_path
+                            )
                         elif command_type == "set_device_parameter":
                             track_index = params.get("track_index", 0)
                             device_index = params.get("device_index", 0)
@@ -322,6 +327,33 @@ class AbletonMCP(ControlSurface):
                             track_index = params.get("track_index", 0)
                             clip_index = params.get("clip_index", 0)
                             result = self._clear_notes_from_clip(track_index, clip_index)
+                        elif command_type == "get_clip_follow_actions":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._get_clip_follow_actions(track_index, clip_index)
+                        elif command_type == "set_clip_follow_actions":
+                            track_index = params.get("track_index", 0)
+                            clip_index = params.get("clip_index", 0)
+                            result = self._set_clip_follow_actions(
+                                track_index,
+                                clip_index,
+                                params.get("action_a", None),
+                                params.get("action_b", None),
+                                params.get("chance_a", None),
+                                params.get("follow_time", None),
+                            )
+                        elif command_type == "set_track_mute":
+                            result = self._set_track_bool(
+                                params.get("track_index", 0), "mute", params.get("value", True)
+                            )
+                        elif command_type == "set_track_solo":
+                            result = self._set_track_bool(
+                                params.get("track_index", 0), "solo", params.get("value", True)
+                            )
+                        elif command_type == "set_track_arm":
+                            result = self._set_track_bool(
+                                params.get("track_index", 0), "arm", params.get("value", True)
+                            )
                         # ── Arrangement view commands ──────────────────────────────
                         elif command_type == "switch_to_arrangement_view":
                             result = self._switch_to_arrangement_view()
@@ -756,6 +788,126 @@ class AbletonMCP(ControlSurface):
             clip_slot.delete_clip()
         return {"deleted": True, "track_index": track_index, "clip_index": clip_index}
 
+    # Live Clip.follow_action_A/B values (LOM).
+    _FOLLOW_ACTION_NAMES = {
+        "none": 0,
+        "stop": 1,
+        "play_again": 2,
+        "again": 2,
+        "previous": 3,
+        "prev": 3,
+        "next": 4,
+        "first": 5,
+        "last": 6,
+        "any": 7,
+        "other": 8,
+    }
+    _FOLLOW_ACTION_LABELS = {
+        0: "none",
+        1: "stop",
+        2: "play_again",
+        3: "previous",
+        4: "next",
+        5: "first",
+        6: "last",
+        7: "any",
+        8: "other",
+    }
+
+    def _resolve_session_clip(self, track_index, clip_index):
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        track = self._song.tracks[track_index]
+        if clip_index < 0 or clip_index >= len(track.clip_slots):
+            raise IndexError("Clip index out of range")
+        clip_slot = track.clip_slots[clip_index]
+        if not clip_slot.has_clip:
+            raise Exception("No clip in slot")
+        return track, clip_slot.clip
+
+    def _parse_follow_action(self, value, field_name):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError(field_name + " must be int 0-8 or action name, not bool")
+        if isinstance(value, int):
+            if value < 0 or value > 8:
+                raise ValueError(field_name + " int must be 0-8")
+            return value
+        key = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        if key in self._FOLLOW_ACTION_NAMES:
+            return self._FOLLOW_ACTION_NAMES[key]
+        if key.isdigit():
+            return self._parse_follow_action(int(key), field_name)
+        raise ValueError(
+            field_name + " unknown action '" + str(value) + "'. "
+            "Use 0-8 or: " + ", ".join(sorted(self._FOLLOW_ACTION_NAMES.keys()))
+        )
+
+    def _get_clip_follow_actions(self, track_index, clip_index):
+        """Read Session clip Follow Actions (A/B, chance, time)."""
+        _track, clip = self._resolve_session_clip(track_index, clip_index)
+        action_a = int(getattr(clip, "follow_action_A", 0))
+        action_b = int(getattr(clip, "follow_action_B", 0))
+        chance_a = float(getattr(clip, "follow_action_chance_A", 1.0))
+        follow_time = float(getattr(clip, "follow_action_time", 0.0))
+        return {
+            "track_index": track_index,
+            "clip_index": clip_index,
+            "clip_name": clip.name,
+            "action_a": action_a,
+            "action_a_name": self._FOLLOW_ACTION_LABELS.get(action_a, str(action_a)),
+            "action_b": action_b,
+            "action_b_name": self._FOLLOW_ACTION_LABELS.get(action_b, str(action_b)),
+            "chance_a": chance_a,
+            "follow_time": follow_time,
+        }
+
+    def _set_clip_follow_actions(
+        self, track_index, clip_index, action_a=None, action_b=None, chance_a=None, follow_time=None
+    ):
+        """Set Session clip Follow Actions. Omitted fields are left unchanged."""
+        _track, clip = self._resolve_session_clip(track_index, clip_index)
+
+        if action_a is not None:
+            if not hasattr(clip, "follow_action_A"):
+                raise RuntimeError("This Live version does not expose clip.follow_action_A")
+            clip.follow_action_A = self._parse_follow_action(action_a, "action_a")
+        if action_b is not None:
+            if not hasattr(clip, "follow_action_B"):
+                raise RuntimeError("This Live version does not expose clip.follow_action_B")
+            clip.follow_action_B = self._parse_follow_action(action_b, "action_b")
+        if chance_a is not None:
+            if not hasattr(clip, "follow_action_chance_A"):
+                raise RuntimeError("This Live version does not expose clip.follow_action_chance_A")
+            # Live expects 0.0–1.0; accept 0–100 for convenience.
+            c = float(chance_a)
+            if c > 1.0:
+                c = c / 100.0
+            clip.follow_action_chance_A = max(0.0, min(1.0, c))
+        if follow_time is not None:
+            if not hasattr(clip, "follow_action_time"):
+                raise RuntimeError("This Live version does not expose clip.follow_action_time")
+            clip.follow_action_time = max(0.0, float(follow_time))
+
+        return self._get_clip_follow_actions(track_index, clip_index)
+
+    def _set_track_bool(self, track_index, attr, value):
+        """Set track mute/solo/arm."""
+        if track_index < 0 or track_index >= len(self._song.tracks):
+            raise IndexError("Track index out of range")
+        if attr not in ("mute", "solo", "arm"):
+            raise ValueError("Unsupported track attribute: " + str(attr))
+        track = self._song.tracks[track_index]
+        if not hasattr(track, attr):
+            raise RuntimeError("Track has no attribute " + attr)
+        setattr(track, attr, bool(value))
+        return {
+            "track_index": track_index,
+            "track_name": track.name,
+            attr: bool(getattr(track, attr)),
+        }
+
     def _get_device_parameters(self, track_index, device_index):
         """List parameters on a device with current values and ranges."""
         if track_index < 0 or track_index >= len(self._song.tracks):
@@ -1163,40 +1315,120 @@ class AbletonMCP(ControlSurface):
         """
         return self._load_browser_item(track_index, uri)
 
-    def _load_browser_item(self, track_index, item_uri):
-        """Load a browser item onto a track by its URI"""
+    def _load_browser_item(self, track_index, item_uri, item_path=None):
+        """Load a browser item onto a track by URI and/or browser path."""
         try:
             if track_index < 0 or track_index >= len(self._song.tracks):
                 raise IndexError("Track index out of range")
-            
+
             track = self._song.tracks[track_index]
-            
-            # Access the application's browser instance instead of creating a new one
             app = self.application()
-            
-            # Find the browser item by URI
-            item = self._find_browser_item_by_uri(app.browser, item_uri)
-            
+            if not app or not hasattr(app, "browser") or app.browser is None:
+                raise RuntimeError("Browser is not available in the Live application")
+
+            devices_before = [d.name for d in track.devices]
+            item = None
+            resolved_via = None
+
+            if item_uri:
+                item = self._find_browser_item_by_uri(app.browser, item_uri, max_depth=14)
+                if item:
+                    resolved_via = "uri"
+
+            # Path fallback (e.g. instruments/Operator) when URI walk misses.
+            if item is None and item_path:
+                lookup = self._get_browser_item(uri=None, path=item_path)
+                if lookup.get("found") and lookup.get("item", {}).get("uri"):
+                    path_uri = lookup["item"]["uri"]
+                    item = self._find_browser_item_by_uri(app.browser, path_uri, max_depth=14)
+                    if item:
+                        resolved_via = "path"
+                        item_uri = path_uri
+                elif lookup.get("found"):
+                    # Re-walk path to get live object (uri-only payload above).
+                    item = self._resolve_browser_item_by_path(item_path)
+                    if item:
+                        resolved_via = "path"
+                        item_uri = getattr(item, "uri", item_uri or "")
+
             if not item:
-                raise ValueError("Browser item with URI '{0}' not found".format(item_uri))
-            
-            # Select the track
+                hint = item_uri or item_path or "(empty)"
+                raise ValueError(
+                    "Browser item '{0}' not found. "
+                    "Use get_browser_items_at_path / get_browser_tree for a valid URI or path.".format(
+                        hint
+                    )
+                )
+
+            if hasattr(item, "is_loadable") and not item.is_loadable:
+                raise ValueError(
+                    "Browser item '{0}' is not loadable (folder?). Pick a leaf device/preset.".format(
+                        getattr(item, "name", item_uri)
+                    )
+                )
+
             self._song.view.selected_track = track
-            
-            # Load the item
             app.browser.load_item(item)
-            
-            result = {
+
+            devices_after = [d.name for d in track.devices]
+            new_devices = devices_after[len(devices_before) :]
+            # If Live replaced rather than appended, surface any name not seen before.
+            if not new_devices:
+                before_set = set(devices_before)
+                new_devices = [n for n in devices_after if n not in before_set]
+
+            return {
                 "loaded": True,
                 "item_name": item.name,
                 "track_name": track.name,
-                "uri": item_uri
+                "track_index": track_index,
+                "uri": item_uri or getattr(item, "uri", ""),
+                "resolved_via": resolved_via,
+                "devices_before": devices_before,
+                "devices_after": devices_after,
+                "new_devices": new_devices,
             }
-            return result
         except Exception as e:
             self.log_message("Error loading browser item: {0}".format(str(e)))
             self.log_message(traceback.format_exc())
             raise
+
+    def _resolve_browser_item_by_path(self, path):
+        """Return the live browser item object for a category/folder path, or None."""
+        try:
+            app = self.application()
+            if not app or not hasattr(app, "browser"):
+                return None
+            path_parts = [p for p in str(path).split("/") if p]
+            if not path_parts:
+                return None
+            root = path_parts[0].lower()
+            current = None
+            root_map = {
+                "instruments": "instruments",
+                "sounds": "sounds",
+                "drums": "drums",
+                "audio_effects": "audio_effects",
+                "midi_effects": "midi_effects",
+            }
+            attr = root_map.get(root, root)
+            if hasattr(app.browser, attr):
+                current = getattr(app.browser, attr)
+            if current is None:
+                return None
+            for part in path_parts[1:]:
+                found = None
+                for child in getattr(current, "children", []):
+                    if child.name.lower() == part.lower():
+                        found = child
+                        break
+                if found is None:
+                    return None
+                current = found
+            return current
+        except Exception as e:
+            self.log_message("Error resolving browser path '{0}': {1}".format(path, str(e)))
+            return None
     
     # Substring markers that point a URI at a likely root. If no marker
     # matches we fall back to the default order, so this is purely an

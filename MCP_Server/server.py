@@ -621,7 +621,10 @@ def set_tempo(ctx: Context, tempo: float, user_prompt: str = "") -> str:
 @rich_telemetry_tool("load_instrument_or_effect")
 def load_instrument_or_effect(ctx: Context, track_index: int, uri: str, user_prompt: str = "") -> str:
     """
-    Load an instrument or effect onto a track using its URI.
+    Load an instrument or effect onto a track using its browser URI.
+
+    Prefer get_browser_items_at_path first to obtain a valid URI.
+    path-style loading is available via load_browser_item.
 
     Parameters:
     - track_index: The index of the track to load the instrument on
@@ -648,6 +651,156 @@ def load_instrument_or_effect(ctx: Context, track_index: int, uri: str, user_pro
     except Exception as e:
         logger.error(f"Error loading instrument by URI: {str(e)}")
         return f"Error loading instrument by URI: {str(e)}"
+
+
+@mcp.tool()
+@rich_telemetry_tool("load_browser_item")
+def load_browser_item(
+    ctx: Context,
+    track_index: int,
+    uri: str = "",
+    path: str = "",
+    user_prompt: str = "",
+) -> str:
+    """
+    Load a browser item (instrument, effect, preset, sample) onto a track.
+
+    Provide uri and/or path. Path format matches get_browser_items_at_path
+    (e.g. "instruments/Operator"). URI is preferred when both are set.
+
+    Parameters:
+    - track_index: Track to load onto
+    - uri: Browser item URI (from get_browser_items_at_path)
+    - path: Optional category/folder path fallback
+    - user_prompt: Optional telemetry prompt
+    """
+    try:
+        if not uri and not path:
+            return "Error: provide uri and/or path"
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "load_browser_item",
+            {
+                "track_index": track_index,
+                "item_uri": uri or "",
+                "path": path or None,
+            },
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        logger.error(f"Error loading browser item: {str(e)}")
+        return f"Error loading browser item: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("get_clip_follow_actions")
+def get_clip_follow_actions(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    user_prompt: str = "",
+) -> str:
+    """
+    Read Follow Actions on a Session clip (action A/B, chance, follow time).
+
+    Action names: none, stop, play_again, previous, next, first, last, any, other
+    (or ints 0–8).
+    """
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "get_clip_follow_actions",
+            {"track_index": track_index, "clip_index": clip_index},
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error reading follow actions: {str(e)}"
+
+
+@mcp.tool()
+@rich_telemetry_tool("set_clip_follow_actions")
+def set_clip_follow_actions(
+    ctx: Context,
+    track_index: int,
+    clip_index: int,
+    action_a: str = "",
+    action_b: str = "",
+    chance_a: float = -1.0,
+    follow_time: float = -1.0,
+    user_prompt: str = "",
+) -> str:
+    """
+    Set Follow Actions on a Session clip. Empty / -1 fields are left unchanged.
+
+    Parameters:
+    - track_index / clip_index: Session clip slot
+    - action_a / action_b: name (next, stop, play_again, ...) or "0"–"8"
+    - chance_a: probability of action A (0.0–1.0, or 0–100)
+    - follow_time: beats before clip end when the action fires
+    """
+    try:
+        ableton = get_ableton_connection()
+        params = {"track_index": track_index, "clip_index": clip_index}
+        if action_a != "":
+            params["action_a"] = action_a
+        if action_b != "":
+            params["action_b"] = action_b
+        if chance_a >= 0:
+            params["chance_a"] = chance_a
+        if follow_time >= 0:
+            params["follow_time"] = follow_time
+        result = ableton.send_command("set_clip_follow_actions", params)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting follow actions: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("set_track_mute")
+def set_track_mute(
+    ctx: Context, track_index: int, mute: bool = True, user_prompt: str = ""
+) -> str:
+    """Mute or unmute a track."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_track_mute", {"track_index": track_index, "value": mute}
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting mute: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("set_track_solo")
+def set_track_solo(
+    ctx: Context, track_index: int, solo: bool = True, user_prompt: str = ""
+) -> str:
+    """Solo or unsolo a track."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_track_solo", {"track_index": track_index, "value": solo}
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting solo: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("set_track_arm")
+def set_track_arm(
+    ctx: Context, track_index: int, arm: bool = True, user_prompt: str = ""
+) -> str:
+    """Arm or disarm a track for recording."""
+    try:
+        ableton = get_ableton_connection()
+        result = ableton.send_command(
+            "set_track_arm", {"track_index": track_index, "value": arm}
+        )
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error setting arm: {str(e)}"
 
 @mcp.tool()
 @telemetry_tool("fire_clip")
